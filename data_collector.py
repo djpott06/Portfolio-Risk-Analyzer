@@ -91,23 +91,35 @@ def download_single_ticker(ticker, start_date, end_date, max_retries=3):
         except Exception as e:
             print(f"Attempt #{attempt} for {ticker} {e} failed.")
         if attempt < max_retries:
-            print(f"Retrying download for {ticker} in 6 seconds.")
-            time.sleep(6)
+            print(f"Retrying download for {ticker} in 15 seconds.")
+            time.sleep(15)
     return None
 
-def download_price_data(tickers, start_date, end_date):
-    price_data = pd.DataFrame()
-    for ticker in tickers:
-        close_prices = download_single_ticker(ticker, start_date, end_date)
-        if close_prices is None: 
-            print(f"\nCould not download {ticker} after multiple attempts.") 
-            print("Stopping script. No CSV will be saved.") 
-            return None 
-        price_data[ticker] = close_prices
-        time.sleep(6)
-    return price_data 
+def download_price_data(tickers, start_date, end_date):    # ← rewritten
+    try:
+        data = yf.download(
+            tickers=" ".join(tickers),
+            start=start_date,
+            end=end_date,
+            auto_adjust=True,
+            progress=False,
+            group_by="ticker"
+        )
+        if data.empty:
+            print("Download failed — no data returned.")
+            return None
+        if len(tickers) == 1:
+            price_data = data[["Close"]].rename(columns={"Close": tickers[0]})
+        else:
+            price_data = data.xs("Close", axis=1, level=1)
+        print(f"Downloaded: {', '.join(tickers)}")
+        return price_data
+    except Exception as e:
+        print(f"Download failed: {e}")
+        return None
 
 def download_benchmark(benchmark, start_date, end_date):
+    time.sleep(15)
     benchmark_prices = download_single_ticker(benchmark, start_date, end_date)
     if benchmark_prices is None:
         print(f"Could not download benchmark {benchmark}.")
@@ -176,7 +188,8 @@ def get_risk_free_rate():
     except:
         print("Could not fetch risk-free rate. Using 4% default.")
         return 0.04
-def calc_beta_and_corr(portfolio_returns,benchmark_returns):
+    
+def calc_beta_and_corr(portfolio_returns, benchmark_returns):
     portfolio_returns, benchmark_returns = portfolio_returns.align(benchmark_returns, join='inner')
     correlation = portfolio_returns.corr(benchmark_returns)
     covarience = portfolio_returns.cov(benchmark_returns)
@@ -187,10 +200,6 @@ def calc_beta_and_corr(portfolio_returns,benchmark_returns):
         beta = covarience/variance
     return beta, correlation
 
-
-
-
-
 def calculate_metrics(portfolio_returns, portfolio_value, risk_free_rate):
     current_value = float(portfolio_value.iloc[-1])
     growth_multiple = float(portfolio_value.iloc[-1]) / float(portfolio_value.iloc[0])
@@ -198,20 +207,17 @@ def calculate_metrics(portfolio_returns, portfolio_value, risk_free_rate):
     annualized_return = growth_multiple ** (252 / num_days) - 1
     annualized_volatility = portfolio_returns.std() * (252 ** 0.5)
     sharpe_ratio = (annualized_return - risk_free_rate) / annualized_volatility
-
-    # Sortino Ratio
-    downside_returns = portfolio_returns[portfolio_returns<0]
-    downside_deviation = downside_returns.std() * (252**0.5)
+    downside_returns = portfolio_returns[portfolio_returns < 0]
+    downside_deviation = downside_returns.std() * (252 ** 0.5)
     if downside_deviation == 0:
         sortino_ratio = None
     else:
-        sortino_ratio = (annualized_return-risk_free_rate)/downside_deviation
-
+        sortino_ratio = (annualized_return - risk_free_rate) / downside_deviation
     return current_value, annualized_return, annualized_volatility, sharpe_ratio, sortino_ratio
 
 def print_results(current_value, annualized_return, annualized_volatility, max_drawdown, sharpe_ratio,
                   bench_current_value, bench_annualized_return, bench_annualized_volatility, 
-                  bench_max_drawdown, bench_sharpe_ratio, risk_free_rate, sortino_ratio, bench_sortino_ratio,beta, correlation):
+                  bench_max_drawdown, bench_sharpe_ratio, risk_free_rate, sortino_ratio, bench_sortino_ratio, beta, correlation):
     print(f"{'Metric':<25} {'Portfolio':>12} {'Benchmark':>12}")
     print("-" * 50)
     print(f"{'Current Value':<25} ${current_value:>11,.2f} ${bench_current_value:>11,.2f}")
@@ -226,8 +232,7 @@ def print_results(current_value, annualized_return, annualized_volatility, max_d
     print(f"{'Correlation':<25} {corr_str} {'N/A':>12}")
     print(f"Risk-Free Rate Used: {risk_free_rate:.2%}")
 
-
-def plot_dashboard(portfolio_value, benchmark_value, drawdown, portfolio_returns,start_date,end_date):
+def plot_dashboard(portfolio_value, benchmark_value, drawdown, portfolio_returns, start_date, end_date):
     fig, (ax1, ax2, ax3) = plt.subplots(nrows=3, figsize=(12, 12), sharex=True)
     ax1.plot(portfolio_value, label="Portfolio Value")
     ax1.plot(benchmark_value, label="Benchmark Value")
@@ -235,7 +240,6 @@ def plot_dashboard(portfolio_value, benchmark_value, drawdown, portfolio_returns
     ax1.set_ylabel("Value ($)")
     ax1.legend()
     ax1.grid(True)
-
     ax2.fill_between(drawdown.index, drawdown, 0, color='red', alpha=0.3, label='Drawdown')
     ax2.plot(drawdown, color='red', linewidth=0.8)
     ax2.axhline(y=0, color='black', linewidth=0.8)
@@ -243,7 +247,6 @@ def plot_dashboard(portfolio_value, benchmark_value, drawdown, portfolio_returns
     ax2.set_ylabel("Drawdown (%)")
     ax2.legend()
     ax2.grid(True)
-
     rolling_vol = portfolio_returns.rolling(30).std() * (252 ** 0.5)
     ax3.plot(rolling_vol, color='navy', label='Rolling 30-Day Volatility')
     ax3.set_title("Rolling Volatility")
@@ -251,7 +254,6 @@ def plot_dashboard(portfolio_value, benchmark_value, drawdown, portfolio_returns
     ax3.set_xlabel("Date")
     ax3.legend()
     ax3.grid(True)
-
     plt.suptitle(f"Portfolio Dashboard: {start_date} to {end_date}", fontsize=14, fontweight='bold')
     plt.tight_layout()
     plt.show()
@@ -262,42 +264,26 @@ def save_report(portfolio_value, benchmark_value, drawdown, portfolio_returns,
                 beta, correlation, bench_current_value, bench_annualized_return,
                 bench_annualized_volatility, bench_max_drawdown, bench_sharpe_ratio,
                 bench_sortino_ratio, risk_free_rate, benchmark, portfolio, weights_series):
-    
     filename = f"portfolio_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
-    
     with PdfPages(filename) as pdf:
-
-        # ── Page 1 ──────────────────────────────────
         fig, ax = plt.subplots(figsize=(10, 8))
         ax.axis('off')
-
-        # title
         ax.text(0.5, 0.97, "Portfolio Report",
                 ha='center', fontsize=22, fontweight='bold', transform=ax.transAxes)
         ax.text(0.5, 0.92, f"{start_date}  to  {end_date}",
                 ha='center', fontsize=13, color='gray', transform=ax.transAxes)
-
-        # divider
         ax.plot([0.05, 0.95], [0.89, 0.89], color='#cccccc', linewidth=1, transform=ax.transAxes)
-
-        # holdings
         ax.text(0.5, 0.84, "Portfolio Holdings", ha='center', fontsize=12,
                 fontweight='bold', transform=ax.transAxes)
-
         y_h = 0.79
         for ticker, weight in zip(weights_series.index, weights_series.values):
             ax.text(0.5, y_h, f"{ticker}  —  {weight:.1%}",
                     ha='center', fontsize=11, transform=ax.transAxes)
             y_h -= 0.05
-
         ax.text(0.5, y_h - 0.01, f"Benchmark: {benchmark}",
                 ha='center', fontsize=11, color='gray', transform=ax.transAxes)
-
-        # divider
         divider_y = y_h - 0.06
         ax.plot([0.05, 0.95], [divider_y, divider_y], color='#cccccc', linewidth=1, transform=ax.transAxes)
-
-        # metrics table
         metrics = [
             ["Current Value",   f"${current_value:,.2f}",       f"${bench_current_value:,.2f}"],
             ["Annual Return",   f"{annualized_return:.2%}",      f"{bench_annualized_return:.2%}"],
@@ -309,10 +295,8 @@ def save_report(portfolio_value, benchmark_value, drawdown, portfolio_returns,
             ["Correlation",     f"{correlation:.2f}" if correlation is not None else "N/A", "N/A"],
             ["Risk-Free Rate",  f"{risk_free_rate:.2%}",         f"{risk_free_rate:.2%}"],
         ]
-
         table_bottom = max(0.02, divider_y - 0.52)
         table_height = divider_y - table_bottom - 0.02
-
         table = ax.table(
             cellText=metrics,
             colLabels=["Metric", "Portfolio", "Benchmark"],
@@ -320,11 +304,9 @@ def save_report(portfolio_value, benchmark_value, drawdown, portfolio_returns,
             colLoc='center',
             bbox=[0.05, table_bottom, 0.90, table_height]
         )
-
         table.auto_set_font_size(False)
         table.set_fontsize(10)
         table.scale(1, 1.4)
-
         for (row, col), cell in table.get_celld().items():
             cell.set_edgecolor('#cccccc')
             if row == 0:
@@ -334,20 +316,15 @@ def save_report(portfolio_value, benchmark_value, drawdown, portfolio_returns,
                 cell.set_facecolor('#f2f6fc')
             else:
                 cell.set_facecolor('white')
-
         pdf.savefig(fig)
         plt.close()
-
-        # ── Page 2 — dashboard chart ─────────────────
         fig, (ax1, ax2, ax3) = plt.subplots(nrows=3, figsize=(12, 12), sharex=True)
-
         ax1.plot(portfolio_value, label="Portfolio Value")
         ax1.plot(benchmark_value, label="Benchmark Value")
         ax1.set_title("Portfolio vs Benchmark")
         ax1.set_ylabel("Value ($)")
         ax1.legend()
         ax1.grid(True)
-
         ax2.fill_between(drawdown.index, drawdown, 0, color='red', alpha=0.3, label='Drawdown')
         ax2.plot(drawdown, color='red', linewidth=0.8)
         ax2.axhline(y=0, color='black', linewidth=0.8)
@@ -355,7 +332,6 @@ def save_report(portfolio_value, benchmark_value, drawdown, portfolio_returns,
         ax2.set_ylabel("Drawdown (%)")
         ax2.legend()
         ax2.grid(True)
-
         rolling_vol = portfolio_returns.rolling(30).std() * (252 ** 0.5)
         ax3.plot(rolling_vol, color='navy', label='Rolling 30-Day Volatility')
         ax3.set_title("Rolling Volatility")
@@ -363,22 +339,18 @@ def save_report(portfolio_value, benchmark_value, drawdown, portfolio_returns,
         ax3.set_xlabel("Date")
         ax3.legend()
         ax3.grid(True)
-
         plt.suptitle(f"Portfolio Dashboard: {start_date} to {end_date}", fontsize=14, fontweight='bold')
         plt.tight_layout()
         pdf.savefig(fig)
         plt.close()
-
         print(f"Report saved to {filename}.")
 
 def main():
     mode = input("Download fresh data or load from CSV? (download/load): ").strip().lower()
-
     benchmark = get_benchmark()
     portfolio = get_user_portfolio()
     start_date, end_date = get_date_range()
-
-    if mode == "load":
+    if mode in ["load", "l"]:
         price_data, benchmark_prices, weights_series = load_from_csv(benchmark)
     else:
         tickers = list(portfolio.keys())
@@ -395,7 +367,6 @@ def main():
         benchmark_prices.to_csv('benchmark_prices.csv')
         print("CSVs successfully downloaded.")
         weights_series = load_weights()
-
     initial_investment = get_initial_investment()
     price_data = load_price_data(weights_series)
     portfolio_returns, portfolio_value = calculate_portfolio(price_data, weights_series, initial_investment)
@@ -405,14 +376,14 @@ def main():
     risk_free_rate = get_risk_free_rate()
     beta, correlation = calc_beta_and_corr(portfolio_returns, benchmark_returns)
     current_value, annualized_return, annualized_volatility, sharpe_ratio, sortino_ratio = (
-        calculate_metrics(portfolio_returns, portfolio_value, risk_free_rate,)
+        calculate_metrics(portfolio_returns, portfolio_value, risk_free_rate)
     )
     bench_current_value, bench_annualized_return, bench_annualized_volatility, bench_sharpe_ratio, bench_sortino_ratio = (
-        calculate_metrics(benchmark_returns, benchmark_value, risk_free_rate,)
+        calculate_metrics(benchmark_returns, benchmark_value, risk_free_rate)
     )
     print_results(current_value, annualized_return, annualized_volatility, max_drawdown, sharpe_ratio,
                   bench_current_value, bench_annualized_return, bench_annualized_volatility,
-                  bench_max_drawdown, bench_sharpe_ratio, risk_free_rate,sortino_ratio, bench_sortino_ratio, beta, correlation)
+                  bench_max_drawdown, bench_sharpe_ratio, risk_free_rate, sortino_ratio, bench_sortino_ratio, beta, correlation)
     plot_dashboard(portfolio_value, benchmark_value, drawdown, portfolio_returns, start_date, end_date)
     save_report(portfolio_value, benchmark_value, drawdown, portfolio_returns,
                 start_date, end_date, current_value, annualized_return,
@@ -420,4 +391,5 @@ def main():
                 beta, correlation, bench_current_value, bench_annualized_return,
                 bench_annualized_volatility, bench_max_drawdown, bench_sharpe_ratio,
                 bench_sortino_ratio, risk_free_rate, benchmark, portfolio, weights_series)
+
 main()
